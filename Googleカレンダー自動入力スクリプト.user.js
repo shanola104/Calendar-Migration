@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Googleカレンダー自動入力スクリプト
 // @namespace    http://tampermonkey.net/
-// @version      1.0.7
-// @description  "MM/DD/タイトル" の形式でGoogleカレンダーに素早く予定を追加します。日付確定問題を根本解決。
+// @version      1.0.8
+// @description  "MM/DD/タイトル" の形式でGoogleカレンダーに素早く予定を追加します。色選択機能付き。
 // @author       ホタル
 // @match        https://calendar.google.com/calendar/*
 // @grant        none
@@ -13,13 +13,30 @@
 
     // ===== 設定 =====
     const CONFIG = {
-        MAX_LOGS: 20, // 20に増加
+        MAX_LOGS: 20,
         COMPACT_MODE: false,
     };
 
     // ===== 状態管理 =====
     let currentTask = null;
     let isCompactMode = CONFIG.COMPACT_MODE;
+    let selectedColor = null; // 選択された色を保存
+
+    // ===== 色の定義 =====
+    const COLOR_PALETTE = [
+        { name: 'トマト', value: '#D50000' },
+        { name: 'フラミンゴ', value: '#E67C73' },
+        { name: 'ミカン', value: '#F4511E' },
+        { name: 'バナナ', value: '#F6BF26' },
+        { name: 'セージ', value: '#33B679' },
+        { name: 'バジル', value: '#0B8043' },
+        { name: 'ピーコック', value: '#039BE5' },
+        { name: 'ブルーベリー', value: '#3F51B5' },
+        { name: 'ラベンダー', value: '#7986CB' },
+        { name: 'グレープ', value: '#8E24AA' },
+        { name: 'グラファイト', value: '#616161' },
+        { name: 'デフォルト', value: '#C0CA33' }
+    ];
 
     // ===== UI関連のコード =====
     const mainContainer = document.createElement('div');
@@ -164,6 +181,87 @@
     }
 
     mainContainer.appendChild(inputSection);
+
+    // ===== 色選択パレットの追加 =====
+    const colorPaletteSection = document.createElement('div');
+    colorPaletteSection.style.cssText = `
+        margin-bottom: ${isCompactMode ? '8px' : '12px'};
+        padding: ${isCompactMode ? '6px 0' : '8px 0'};
+        border-bottom: 1px solid #f1f3f4;
+    `;
+
+    const colorPaletteTitle = document.createElement('div');
+    colorPaletteTitle.textContent = '色を選択';
+    colorPaletteTitle.style.cssText = `
+        font-size: ${isCompactMode ? '11px' : '12px'};
+        color: #5f6368;
+        margin-bottom: 6px;
+        font-weight: 500;
+    `;
+
+    const colorPalette = document.createElement('div');
+    colorPalette.style.cssText = `
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        justify-content: center;
+    `;
+
+    // 色のボタンを作成
+    COLOR_PALETTE.forEach(color => {
+        const colorButton = document.createElement('button');
+        colorButton.title = color.name;
+        colorButton.style.cssText = `
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: 2px solid transparent;
+            background-color: ${color.value};
+            cursor: pointer;
+            transition: all 0.2s ease;
+        `;
+
+        // 選択された色を強調表示
+        if (color.value === '#C0CA33') {
+            selectedColor = color.value;
+            colorButton.style.borderColor = '#1a73e8';
+            colorButton.style.transform = 'scale(1.1)';
+        }
+
+        colorButton.addEventListener('click', function() {
+            // すべての色ボタンのスタイルをリセット
+            colorPalette.querySelectorAll('button').forEach(btn => {
+                btn.style.borderColor = 'transparent';
+                btn.style.transform = 'scale(1)';
+            });
+
+            // 選択された色を強調
+            this.style.borderColor = '#1a73e8';
+            this.style.transform = 'scale(1.1)';
+            selectedColor = color.value;
+
+            log(`色を選択: ${color.name}`, 'info');
+            updateStatus(`色設定: ${color.name}`, 'info');
+        });
+
+        colorButton.addEventListener('mouseenter', function() {
+            if (selectedColor !== color.value) {
+                this.style.transform = 'scale(1.1)';
+            }
+        });
+
+        colorButton.addEventListener('mouseleave', function() {
+            if (selectedColor !== color.value) {
+                this.style.transform = 'scale(1)';
+            }
+        });
+
+        colorPalette.appendChild(colorButton);
+    });
+
+    colorPaletteSection.appendChild(colorPaletteTitle);
+    colorPaletteSection.appendChild(colorPalette);
+    mainContainer.appendChild(colorPaletteSection);
 
     // ステータスエリアの作成
     const statusArea = document.createElement('div');
@@ -403,6 +501,59 @@
     }
 
     /**
+     * 色を設定する関数（日付設定直後に実行）
+     */
+    async function setEventColor() {
+        if (!selectedColor) {
+            log("色が選択されていません。デフォルトの色を使用します。", "info");
+            return false;
+        }
+
+        try {
+            log(`色設定を開始: ${selectedColor}`, "info");
+
+            // 色選択ボタンを探す
+            const colorButton = document.querySelector('button[aria-label="カレンダーの色、予定の色"], [jsname="kRX3Ve"]');
+            if (!colorButton) {
+                throw new Error("色選択ボタンが見つかりません");
+            }
+
+            // 色選択ボタンをクリックしてメニューを開く
+            colorButton.click();
+            log("色選択メニューを開きました", "info");
+            await wait(800);
+
+            // 指定された色の要素を探す
+            const colorElement = document.querySelector(`[data-color="${selectedColor}"]`);
+            if (!colorElement) {
+                throw new Error(`指定された色の要素が見つかりません: ${selectedColor}`);
+            }
+
+            // 色をクリック
+            colorElement.click();
+            log(`色を設定しました: ${selectedColor}`, "success");
+            await wait(500);
+
+            // 色選択メニューを閉じる（ESCキーを送信）
+            const escEvent = new KeyboardEvent('keydown', {
+                key: 'Escape',
+                code: 'Escape',
+                keyCode: 27,
+                which: 27,
+                bubbles: true
+            });
+            document.activeElement.dispatchEvent(escEvent);
+
+            await wait(300);
+            return true;
+
+        } catch (error) {
+            log(`色設定エラー: ${error.message}`, "warning");
+            return false;
+        }
+    }
+
+    /**
      * 根本解決: 日付を確実に設定する関数
      */
     async function setDateDirectly(month, day) {
@@ -500,46 +651,18 @@
 
         if (isSuccess) {
             log(`日付設定成功: ${finalValue}`, "success");
+
+            // 日付設定成功後に色を設定
+            await setEventColor();
+
             return true;
         } else {
             log(`日付が反映されていません。現在: ${finalValue}`, "warning");
-            // 最終手段: 手動クリックをシミュレート
-            log("最終手段: 手動クリックシミュレーション", "info");
-            try {
-                const rect = dateInput.getBoundingClientRect();
-                const clickEvent = new MouseEvent('click', {
-                    view: window,
-                    bubbles: true,
-                    cancelable: true,
-                    clientX: rect.left + rect.width / 2,
-                    clientY: rect.top + rect.height / 2
-                });
-                dateInput.dispatchEvent(clickEvent);
-                await wait(300);
 
-                // もう一度値を設定
-                dateInput.value = formattedDate;
-                ['input', 'change'].forEach(eventType => {
-                    dateInput.dispatchEvent(new Event(eventType, { bubbles: true }));
-                });
-                await wait(500);
-            } catch (e) {
-                log(`手動クリックシミュレーション失敗: ${e.message}`, "error");
-            }
+            // 日付設定が不完全でも色設定を試みる
+            await setEventColor();
 
-            // 成功したか再確認
-            const finalCheck = dateInput.value;
-            const finalSuccess = finalCheck.includes(`${month}月${day}日`) ||
-                               finalCheck.includes(`${year}年${month}月${day}日`) ||
-                               finalCheck.includes(`${month}/${day}`);
-
-            if (finalSuccess) {
-                log(`最終確認: 日付設定成功 - ${finalCheck}`, "success");
-                return true;
-            } else {
-                log(`最終確認: 日付設定失敗 - ${finalCheck}`, "error");
-                return false;
-            }
+            return false;
         }
     }
 
@@ -570,10 +693,10 @@
             // 4. 終日を有効化
             await toggleAllDayIfNeeded();
 
-            // 5. 日付を確実に設定（複数方法で試行）
+            // 5. 日付を確実に設定（複数方法で試行）+ 色設定
             const dateSet = await setDateDirectly(month, day);
             if (!dateSet) {
-                throw new Error("日付の設定に失敗しました。手動で日付を設定してください。");
+                log("日付の設定に問題がありましたが処理を続行します", "warning");
             }
 
             // 6. 追加の待機時間を設ける
@@ -655,7 +778,7 @@
     });
 
     // 初期化完了
-    log('スクリプト v1.0.7 が初期化されました', 'success');
+    log('スクリプト v1.0.8 が初期化されました', 'success');
     log('作者: ホタル', 'info');
-    log('ログ保存数: ' + CONFIG.MAX_LOGS, 'info');
+    log('色選択機能を追加しました', 'info');
 })();
