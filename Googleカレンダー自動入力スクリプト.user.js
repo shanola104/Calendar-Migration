@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Googleカレンダー自動入力スクリプト
 // @namespace    http://tampermonkey.net/
-// @version      1.0.8
+// @version      1.0.9
 // @description  "MM/DD/タイトル" の形式でGoogleカレンダーに素早く予定を追加します。色選択機能付き。
 // @author       ホタル
 // @match        https://calendar.google.com/calendar/*
@@ -20,7 +20,7 @@
     // ===== 状態管理 =====
     let currentTask = null;
     let isCompactMode = CONFIG.COMPACT_MODE;
-    let selectedColor = null; // 選択された色を保存
+    let selectedColor = null;
 
     // ===== 色の定義 =====
     const COLOR_PALETTE = [
@@ -37,6 +37,57 @@
         { name: 'グラファイト', value: '#616161' },
         { name: 'デフォルト', value: '#C0CA33' }
     ];
+
+    // ===== CSSアニメーションの定義 =====
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes colorPulse {
+            0% {
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(26, 115, 232, 0.7);
+                border-color: #1a73e8;
+            }
+            50% {
+                transform: scale(1.25);
+                box-shadow: 0 0 0 8px rgba(26, 115, 232, 0.3);
+                border-color: #1a73e8;
+            }
+            100% {
+                transform: scale(1.15);
+                box-shadow: 0 0 0 4px rgba(26, 115, 232, 0.5);
+                border-color: #1a73e8;
+            }
+        }
+
+        @keyframes smoothGlow {
+            0% {
+                box-shadow: 0 0 5px rgba(26, 115, 232, 0.5),
+                            inset 0 0 10px rgba(255, 255, 255, 0.2);
+            }
+            50% {
+                box-shadow: 0 0 20px rgba(26, 115, 232, 0.8),
+                            inset 0 0 15px rgba(255, 255, 255, 0.4);
+            }
+            100% {
+                box-shadow: 0 0 10px rgba(26, 115, 232, 0.6),
+                            inset 0 0 12px rgba(255, 255, 255, 0.3);
+            }
+        }
+
+        .color-button-selected {
+            animation: colorPulse 0.6s ease-out forwards,
+                      smoothGlow 1.5s ease-in-out infinite alternate !important;
+            z-index: 10;
+            position: relative;
+        }
+
+        .color-button-hover {
+            transform: scale(1.1);
+            box-shadow: 0 0 8px rgba(0, 0, 0, 0.3);
+            transition: all 0.2s ease;
+        }
+    `;
+    document.head.appendChild(style);
 
     // ===== UI関連のコード =====
     const mainContainer = document.createElement('div');
@@ -218,26 +269,26 @@
             border: 2px solid transparent;
             background-color: ${color.value};
             cursor: pointer;
-            transition: all 0.2s ease;
+            transition: all 0.3s ease;
+            position: relative;
         `;
 
-        // 選択された色を強調表示
+        // デフォルト色を選択状態に
         if (color.value === '#C0CA33') {
             selectedColor = color.value;
-            colorButton.style.borderColor = '#1a73e8';
-            colorButton.style.transform = 'scale(1.1)';
+            colorButton.classList.add('color-button-selected');
         }
 
         colorButton.addEventListener('click', function() {
-            // すべての色ボタンのスタイルをリセット
+            // すべての色ボタンの選択状態をリセット
             colorPalette.querySelectorAll('button').forEach(btn => {
+                btn.classList.remove('color-button-selected');
                 btn.style.borderColor = 'transparent';
                 btn.style.transform = 'scale(1)';
             });
 
-            // 選択された色を強調
-            this.style.borderColor = '#1a73e8';
-            this.style.transform = 'scale(1.1)';
+            // 新しい色を選択状態に
+            this.classList.add('color-button-selected');
             selectedColor = color.value;
 
             log(`色を選択: ${color.name}`, 'info');
@@ -245,15 +296,13 @@
         });
 
         colorButton.addEventListener('mouseenter', function() {
-            if (selectedColor !== color.value) {
-                this.style.transform = 'scale(1.1)';
+            if (!this.classList.contains('color-button-selected')) {
+                this.classList.add('color-button-hover');
             }
         });
 
         colorButton.addEventListener('mouseleave', function() {
-            if (selectedColor !== color.value) {
-                this.style.transform = 'scale(1)';
-            }
+            this.classList.remove('color-button-hover');
         });
 
         colorPalette.appendChild(colorButton);
@@ -778,7 +827,7 @@
     });
 
     // 初期化完了
-    log('スクリプト v1.0.8 が初期化されました', 'success');
+    log('スクリプト v1.0.9 が初期化されました', 'success');
     log('作者: ホタル', 'info');
-    log('色選択機能を追加しました', 'info');
+    log('色強調表示を強化しました', 'info');
 })();
