@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Googleカレンダー自動入力スクリプト
 // @namespace    http://tampermonkey.net/
-// @version      1.6.0
+// @version      1.6.1
 // @description  "MM/DD/タイトル" または "MM/DD-MM/DD/タイトル" の形式でGoogleカレンダーに素早く予定を追加します。色選択機能と一括追加機能付き。
 // @author       ホタル
 // @match        https://calendar.google.com/calendar/*
@@ -242,6 +242,7 @@
             flex-wrap: wrap;
             gap: 4px;
             justify-content: center;
+            margin-bottom: 8px;
         }
 
         .batch-color-button {
@@ -289,6 +290,24 @@
 
         .batch-color-button:hover .batch-color-tooltip {
             opacity: 1;
+        }
+
+        /* スラッシュオプション */
+        .slash-option {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 8px;
+            font-size: 12px;
+            color: #5f6368;
+        }
+
+        .slash-checkbox {
+            margin-right: 6px;
+        }
+
+        .slash-label {
+            cursor: pointer;
         }
 
         .batch-modal-footer {
@@ -1021,7 +1040,7 @@
         };
     }
 
-    // ===== 一括追加モーダルの作成（カラーパレット付き） =====
+    // ===== 一括追加モーダルの作成（カラーパレット＋スラッシュオプション付き） =====
     function createBatchModal() {
         log('一括追加モーダルを作成します', 'info');
 
@@ -1037,7 +1056,7 @@
             const overlay = document.createElement('div');
             overlay.className = 'batch-modal-overlay';
 
-            // モーダルの作成（幅を少し広げる）
+            // モーダルの作成
             const modal = document.createElement('div');
             modal.className = 'batch-modal';
 
@@ -1091,14 +1110,38 @@
 
                 // クリックイベント
                 colorButton.addEventListener('click', function() {
-                    insertColorName(textarea, color.name);
+                    insertColorName(textarea, color.name, slashCheckbox.checked);
                 });
 
                 colorPalette.appendChild(colorButton);
             });
 
+            // ===== スラッシュオプションの追加 =====
+            const slashOption = document.createElement('div');
+            slashOption.className = 'slash-option';
+
+            const slashCheckbox = document.createElement('input');
+            slashCheckbox.type = 'checkbox';
+            slashCheckbox.className = 'slash-checkbox';
+            slashCheckbox.id = 'slash-option';
+            slashCheckbox.checked = true; // デフォルトでチェック
+
+            const slashLabel = document.createElement('label');
+            slashLabel.className = 'slash-label';
+            slashLabel.htmlFor = 'slash-option';
+            slashLabel.textContent = '色名の前にスラッシュを付ける（例: ' + (slashCheckbox.checked ? '/トマト' : 'トマト') + '）';
+
+            // チェックボックスの変更イベント
+            slashCheckbox.addEventListener('change', function() {
+                slashLabel.textContent = '色名の前にスラッシュを付ける（例: ' + (this.checked ? '/トマト' : 'トマト') + '）';
+            });
+
+            slashOption.appendChild(slashCheckbox);
+            slashOption.appendChild(slashLabel);
+
             colorPaletteSection.appendChild(colorPaletteTitle);
             colorPaletteSection.appendChild(colorPalette);
+            colorPaletteSection.appendChild(slashOption); // スラッシュオプションを追加
 
             const help = document.createElement('div');
             help.className = 'batch-help';
@@ -1224,23 +1267,26 @@
         }
     }
 
-    // ===== 色名挿入関数 =====
-    function insertColorName(textarea, colorName) {
+    // ===== 色名挿入関数（スラッシュオプション対応） =====
+    function insertColorName(textarea, colorName, addSlash) {
         const startPos = textarea.selectionStart;
         const endPos = textarea.selectionEnd;
         const text = textarea.value;
 
+        // 挿入するテキストを決定（スラッシュオプションに基づく）
+        const insertText = addSlash ? `/${colorName}` : colorName;
+
         // カーソル位置に色名を挿入
-        textarea.value = text.substring(0, startPos) + colorName + text.substring(endPos);
+        textarea.value = text.substring(0, startPos) + insertText + text.substring(endPos);
 
         // カーソルを挿入したテキストの後に移動
-        textarea.selectionStart = startPos + colorName.length;
-        textarea.selectionEnd = startPos + colorName.length;
+        textarea.selectionStart = startPos + insertText.length;
+        textarea.selectionEnd = startPos + insertText.length;
 
         // フォーカスを戻す
         textarea.focus();
 
-        log(`色名「${colorName}」を入力しました`, 'info');
+        log(`色名「${insertText}」を入力しました`, 'info');
     }
 
     // ===== 進捗表示付き一括実行関数 =====
@@ -1643,7 +1689,7 @@
     }
 
     /**
-     * シンプルな日付設定関数 - エンターキーのみを使用
+     * シンプルな日付設定関数 - エンターキーののみを使用
      */
     async function setDateWithEnter(startMonth, startDay, endMonth = null, endDay = null) {
         log("シンプルな日付設定を開始", "info");
@@ -1876,9 +1922,9 @@
     });
 
     // 初期化完了
-    log('スクリプト v1.6.0 が初期化されました', 'success');
+    log('スクリプト v1.6.1 が初期化されました', 'success');
     log('作者: ホタル', 'info');
-    log('一括追加ウィンドウにカラーパレットを追加しました', 'info');
+    log('一括追加ウィンドウにスラッシュオプションを追加しました', 'info');
     log('完了時に「完了！」と表示されるようになりました', 'info');
     log('完了時に進捗バーが緑色に変わります', 'info');
     log('入力例: "11/23/会議" または "11/2-11/5/ハロウィン"', 'info');
