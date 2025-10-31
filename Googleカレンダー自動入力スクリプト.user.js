@@ -320,9 +320,11 @@
     document.head.appendChild(style);
 
     // ===== UI関連のコード =====
+    
     const mainContainer = document.createElement('div');
     mainContainer.id = 'gcal-auto-script-container';
     Object.assign(mainContainer.style, {
+        userSelect: 'none',
         position: 'fixed',
         top: '20px',
         right: '20px',
@@ -338,7 +340,20 @@
         transition: 'all 0.3s ease',
         overflow: 'hidden'
     });
+
+    // ドラッグできるようにする。
+    mainContainer.onpointermove = function(event){
+        if(event.buttons){
+            this.style.left = this.offsetLeft + 2 * event.movementX + 'px'
+            this.style.top = this.offsetTop  + 2 * event.movementY + 'px'
+            this.style.position = 'absolute'
+            this.draggable = false
+            this.setPointerCapture(event.pointerId)
+        }
+    }
+
     document.body.appendChild(mainContainer);
+
 
     // ヘッダーの作成
     const header = document.createElement('div');
@@ -367,7 +382,6 @@
         border: none;
         cursor: pointer;
         font-size: 16px;
-        padding: 4px 8px;
         border-radius: 6px;
         color: #5f6368;
         transition: background-color 0.2s;
