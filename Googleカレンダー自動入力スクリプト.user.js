@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Googleカレンダー自動入力スクリプト
 // @namespace    http://tampermonkey.net/
-// @version      1.1.1
+// @version      1.2.0
 // @description  "MM/DD/タイトル" または "MM/DD-MM/DD/タイトル" の形式でGoogleカレンダーに素早く予定を追加します。色選択機能付き。
 // @author       ホタル
 // @match        https://calendar.google.com/calendar/*
@@ -638,12 +638,13 @@
     }
 
     /**
-     * 日付を設定する関数（開始日と終了日の両方に対応）
+     * シンプルな日付設定関数 - エンターキーのみを使用
      */
-    async function setDateDirectly(startMonth, startDay, endMonth = null, endDay = null) {
-        log("日付設定を開始", "info");
+    async function setDateWithEnter(startMonth, startDay, endMonth = null, endDay = null) {
+        log("シンプルな日付設定を開始", "info");
 
         const isRange = endMonth !== null && endDay !== null;
+        const year = new Date().getFullYear();
 
         // 開始日の設定
         const startDateInput = await waitForElement('input[aria-label*="開始日"]');
@@ -651,24 +652,20 @@
             throw new Error("開始日入力フィールドが見つかりません");
         }
 
-        const year = new Date().getFullYear();
         const startFormattedDate = `${year}年${startMonth}月${startDay}日`;
 
-        // 方法1: 直接入力とイベント発火
-        log(`方法1: 開始日を直接入力 - ${startFormattedDate}`, "info");
+        // 開始日を入力してエンター
+        log(`開始日を入力: ${startFormattedDate}`, "info");
         startDateInput.focus();
         startDateInput.select();
         startDateInput.value = startFormattedDate;
 
-        // すべての関連イベントを発火
-        ['input', 'change', 'keydown', 'keyup', 'blur'].forEach(eventType => {
-            startDateInput.dispatchEvent(new Event(eventType, { bubbles: true }));
-        });
+        // 入力イベントを発火
+        startDateInput.dispatchEvent(new Event('input', { bubbles: true }));
+        await wait(200);
 
-        await wait(300);
-
-        // 追加: エンターキーを送信して入力を確定
-        log("エンターキーを送信して入力を確定", "info");
+        // エンターキーで確定
+        log("開始日にエンターキーを送信", "info");
         const enterEvent = new KeyboardEvent('keydown', {
             key: 'Enter',
             code: 'Enter',
@@ -677,7 +674,7 @@
             bubbles: true
         });
         startDateInput.dispatchEvent(enterEvent);
-        await wait(500);
+        await wait(800);
 
         // 期間指定の場合、終了日も設定
         if (isRange) {
@@ -687,89 +684,23 @@
             }
 
             const endFormattedDate = `${year}年${endMonth}月${endDay}日`;
-            log(`期間指定: 終了日を設定 - ${endFormattedDate}`, "info");
+            log(`終了日を入力: ${endFormattedDate}`, "info");
 
             endDateInput.focus();
             endDateInput.select();
             endDateInput.value = endFormattedDate;
 
-            // すべての関連イベントを発火
-            ['input', 'change', 'keydown', 'keyup', 'blur'].forEach(eventType => {
-                endDateInput.dispatchEvent(new Event(eventType, { bubbles: true }));
-            });
+            // 入力イベントを発火
+            endDateInput.dispatchEvent(new Event('input', { bubbles: true }));
+            await wait(200);
 
-            await wait(300);
-
-            // 終了日にもエンターキーを送信
+            // エンターキーで確定
             log("終了日にエンターキーを送信", "info");
             endDateInput.dispatchEvent(enterEvent);
-            await wait(500);
+            await wait(800);
         }
 
-        // 方法2: カレンダーピッカーを開いて閉じる
-        log("方法2: カレンダーピッカー操作", "info");
-        try {
-            // カレンダーピッカーを開く
-            startDateInput.click();
-            await wait(500);
-
-            // カレンダーピッカーを閉じる (ESCキー)
-            const escEvent = new KeyboardEvent('keydown', {
-                key: 'Escape',
-                code: 'Escape',
-                keyCode: 27,
-                which: 27,
-                bubbles: true
-            });
-            document.activeElement.dispatchEvent(escEvent);
-            await wait(300);
-        } catch (e) {
-            log(`カレンダーピッカー操作失敗: ${e.message}`, "warning");
-        }
-
-        // 方法3: 強制フォーカス移動サイクル
-        log("方法3: 強制フォーカス移動", "info");
-        try {
-            const titleInput = document.querySelector('input[aria-label="タイトルと日時を追加"], input[aria-label="タイトルを追加"], input[aria-label="タイトル"]');
-            if (titleInput) {
-                // タイトル → 開始日 → タイトルの順でフォーカス移動
-                titleInput.focus();
-                await wait(200);
-                startDateInput.focus();
-                await wait(200);
-                titleInput.focus();
-                await wait(200);
-            }
-        } catch (e) {
-            log(`フォーカス移動失敗: ${e.message}`, "warning");
-        }
-
-        // 方法4: 複数回のクリックで確定
-        log("方法4: 複数クリック確定", "info");
-        try {
-            const dialog = document.querySelector('div[role="dialog"]');
-            if (dialog) {
-                // ダイアログ内の複数箇所をクリック
-                const clickableElements = [
-                    dialog.querySelector('div[role="heading"]'),
-                    dialog.querySelector('.pHox4e'),
-                    dialog.querySelector('.Shmoqf'),
-                    dialog
-                ].filter(el => el);
-
-                for (let i = 0; i < Math.min(3, clickableElements.length); i++) {
-                    clickableElements[i].click();
-                    await wait(150);
-                }
-            }
-        } catch (e) {
-            log(`複数クリック失敗: ${e.message}`, "warning");
-        }
-
-        // 最終確認と待機
-        await wait(800);
-
-        // 最終的な値の確認
+        // 最終確認
         const startFinalValue = startDateInput.value;
         const startSuccess = startFinalValue.includes(`${startMonth}月${startDay}日`) ||
                            startFinalValue.includes(`${year}年${startMonth}月${startDay}日`) ||
@@ -791,17 +722,9 @@
                 `日付設定成功: ${startMonth}/${startDay} - ${endMonth}/${endDay}` :
                 `日付設定成功: ${startMonth}/${startDay}`;
             log(successMessage, "success");
-
-            // 日付設定成功後に色を設定
-            await setEventColor();
-
             return true;
         } else {
             log(`日付が完全に反映されていません。開始日: ${startFinalValue}`, "warning");
-
-            // 日付設定が不完全でも色設定を試みる
-            await setEventColor();
-
             return false;
         }
     }
@@ -840,27 +763,30 @@
             // 4. 終日を有効化
             await toggleAllDayIfNeeded();
 
-            // 5. 日付を確実に設定（複数方法で試行）+ 色設定
+            // 5. 日付をシンプルな方法で設定 + 色設定
             let dateSet;
             if (parsedData.type === 'range') {
-                dateSet = await setDateDirectly(
+                dateSet = await setDateWithEnter(
                     parsedData.startMonth,
                     parsedData.startDay,
                     parsedData.endMonth,
                     parsedData.endDay
                 );
             } else {
-                dateSet = await setDateDirectly(parsedData.month, parsedData.day);
+                dateSet = await setDateWithEnter(parsedData.month, parsedData.day);
             }
 
             if (!dateSet) {
                 log("日付の設定に問題がありましたが処理を続行します", "warning");
             }
 
-            // 6. 追加の待機時間を設ける
+            // 6. 色設定
+            await setEventColor();
+
+            // 7. 追加の待機時間を設ける
             await wait(1000);
 
-            // 7. 保存
+            // 8. 保存
             const saveButton = findButtonByText('保存');
             if (saveButton) {
                 saveButton.click();
@@ -938,8 +864,8 @@
     });
 
     // 初期化完了
-    log('スクリプト v1.1.1 が初期化されました', 'success');
+    log('スクリプト v1.2.0 が初期化されました', 'success');
     log('作者: ホタル', 'info');
-    log('長期日付選択機能とエンターキー確定を追加しました', 'info');
+    log('シンプルなエンターキー方式で日付設定', 'info');
     log('入力例: "11/23/会議" または "11/2-11/5/ハロウィン"', 'info');
 })();
