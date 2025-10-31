@@ -1071,6 +1071,7 @@
             
             content.appendChild(textarea);
             content.appendChild(help);
+            content.appendChild(colorPaletteSection); // カラーパレットを追加
             content.appendChild(progress);
             content.appendChild(status);
             
@@ -1909,3 +1910,4 @@
     log('完了時に進捗バーが緑色に変わります', 'info');
     log('入力例: "11/23/会議" または "11/2-11/5/ハロウィン"', 'info');
 })();
+
