@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Googleカレンダー自動入力スクリプト
 // @namespace    http://tampermonkey.net/
-// @version      1.4.0
+// @version      1.5.5
 // @description  "MM/DD/タイトル" または "MM/DD-MM/DD/タイトル" の形式でGoogleカレンダーに素早く予定を追加します。色選択機能と一括追加機能付き。
 // @author       ホタル
 // @match        https://calendar.google.com/calendar/*
@@ -22,6 +22,8 @@
     let isCompactMode = CONFIG.COMPACT_MODE;
     let selectedColor = null;
     let isBatchProcessing = false;
+    let progressWindow = null;
+    let taskList = [];
 
     // ===== 色の定義 =====
     const COLOR_PALETTE = [
@@ -316,10 +318,151 @@
             background: #fce8e6;
             color: #c5221f;
         }
+        
+        /* 進捗ウィンドウのスタイル */
+        .progress-window {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 300px;
+            background: white;
+            border: 1px solid #dadce0;
+            border-radius: 12px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.15);
+            z-index: 9999;
+            font-family: 'Roboto', sans-serif;
+            overflow: hidden;
+        }
+        
+        .progress-header {
+            padding: 12px 16px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .progress-title {
+            font-weight: 500;
+            color: #202124;
+            font-size: 14px;
+        }
+        
+        .progress-close {
+            background: none;
+            border: none;
+            font-size: 18px;
+            cursor: pointer;
+            color: #5f6368;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+        }
+        
+        .progress-close:hover {
+            background: #f1f3f4;
+        }
+        
+        .progress-content {
+            padding: 16px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .task-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        
+        .task-item {
+            display: flex;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #f1f3f4;
+        }
+        
+        .task-item:last-child {
+            border-bottom: none;
+        }
+        
+        .task-status {
+            margin-right: 8px;
+            font-size: 14px;
+            width: 20px;
+            text-align: center;
+        }
+        
+        .task-name {
+            flex: 1;
+            font-size: 13px;
+            color: #5f6368;
+        }
+        
+        .task-success .task-name {
+            color: #137333;
+        }
+        
+        .task-error .task-name {
+            color: #c5221f;
+        }
+        
+        .progress-summary {
+            margin-top: 12px;
+            padding: 8px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            text-align: center;
+            font-size: 12px;
+            color: #5f6368;
+        }
+        
+        .progress-summary.completed {
+            background: #e6f4ea;
+            color: #137333;
+            font-weight: 500;
+        }
+        
+        .progress-bar-container {
+            width: 100%;
+            height: 8px;
+            background: #f1f3f4;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 8px 0;
+        }
+        
+        .progress-bar-fill {
+            height: 100%;
+            background: #1a73e8;
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+        
+        .progress-bar-fill.completed {
+            background: #34a853;
+        }
+        
+        /* 署名スタイル */
+        .script-signature {
+            text-align: center;
+            font-size: 10px;
+            color: #999;
+            padding: 4px 0;
+            margin-top: 8px;
+            border-top: 1px solid #f1f3f4;
+            font-style: italic;
+        }
     `;
     document.head.appendChild(style);
 
-    // ===== UI関連のコード =====
+    // ===== メインUIの作成 =====
     const mainContainer = document.createElement('div');
     mainContainer.id = 'gcal-auto-script-container';
     Object.assign(mainContainer.style, {
@@ -646,6 +789,171 @@
         mainContainer.appendChild(logContainer);
     }
 
+    // ===== 署名の追加 =====
+    const signature = document.createElement('div');
+    signature.className = 'script-signature';
+    signature.textContent = 'Powerd by Firefly';
+    mainContainer.appendChild(signature);
+
+    // ===== 進捗ウィンドウの作成 =====
+    function createProgressWindow(totalTasks) {
+        // 既存の進捗ウィンドウをクリーンアップ
+        if (progressWindow) {
+            progressWindow.remove();
+        }
+
+        progressWindow = document.createElement('div');
+        progressWindow.className = 'progress-window';
+
+        // ヘッダー
+        const header = document.createElement('div');
+        header.className = 'progress-header';
+
+        const title = document.createElement('div');
+        title.className = 'progress-title';
+        title.textContent = '一括追加の進捗';
+
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'progress-close';
+        closeBtn.textContent = '×';
+        closeBtn.title = '閉じる';
+
+        header.appendChild(title);
+        header.appendChild(closeBtn);
+
+        // コンテンツ
+        const content = document.createElement('div');
+        content.className = 'progress-content';
+
+        // 進捗バーの追加
+        const progressBarContainer = document.createElement('div');
+        progressBarContainer.className = 'progress-bar-container';
+        
+        const progressBarFill = document.createElement('div');
+        progressBarFill.className = 'progress-bar-fill';
+        progressBarFill.style.width = '0%';
+        
+        progressBarContainer.appendChild(progressBarFill);
+        content.appendChild(progressBarContainer);
+
+        const taskListElement = document.createElement('ul');
+        taskListElement.className = 'task-list';
+
+        // タスクリストを初期化
+        taskList = [];
+        for (let i = 0; i < totalTasks; i++) {
+            const taskItem = document.createElement('li');
+            taskItem.className = 'task-item';
+
+            const taskStatus = document.createElement('div');
+            taskStatus.className = 'task-status';
+            taskStatus.textContent = '⏳'; // 初期状態は待機中
+
+            const taskName = document.createElement('div');
+            taskName.className = 'task-name';
+            taskName.textContent = `タスク ${i + 1}`;
+
+            taskItem.appendChild(taskStatus);
+            taskItem.appendChild(taskName);
+            taskListElement.appendChild(taskItem);
+
+            taskList.push({
+                element: taskItem,
+                status: taskStatus,
+                name: taskName,
+                completed: false,
+                success: false,
+                running: false
+            });
+        }
+
+        content.appendChild(taskListElement);
+
+        // サマリー
+        const summary = document.createElement('div');
+        summary.className = 'progress-summary';
+        summary.textContent = `進捗: 0/${totalTasks}`;
+
+        content.appendChild(summary);
+
+        progressWindow.appendChild(header);
+        progressWindow.appendChild(content);
+
+        // イベントリスナー
+        closeBtn.addEventListener('click', function() {
+            progressWindow.remove();
+            progressWindow = null;
+        });
+
+        document.body.appendChild(progressWindow);
+
+        return {
+            updateTask: function(index, success, message) {
+                if (index >= 0 && index < taskList.length) {
+                    const task = taskList[index];
+                    task.completed = true;
+                    task.success = success;
+                    task.running = false;
+                    
+                    if (message) {
+                        task.name.textContent = message;
+                    }
+                    
+                    // ステータス絵文字を適切に設定
+                    if (success) {
+                        task.status.textContent = '✅';
+                        task.element.className = 'task-item task-success';
+                    } else {
+                        task.status.textContent = '❌';
+                        task.element.className = 'task-item task-error';
+                    }
+                    
+                    // 進捗バーとサマリーを更新
+                    const completedCount = taskList.filter(t => t.completed).length;
+                    const progressPercent = (completedCount / totalTasks) * 100;
+                    
+                    progressBarFill.style.width = `${progressPercent}%`;
+                    
+                    // すべてのタスクが完了したら「完了！」と表示
+                    if (completedCount === totalTasks) {
+                        summary.textContent = '完了！';
+                        summary.className = 'progress-summary completed';
+                        progressBarFill.className = 'progress-bar-fill completed';
+                    } else {
+                        summary.textContent = `進捗: ${completedCount}/${totalTasks}`;
+                        summary.className = 'progress-summary';
+                        progressBarFill.className = 'progress-bar-fill';
+                    }
+                }
+            },
+            setTaskRunning: function(index, message) {
+                if (index >= 0 && index < taskList.length) {
+                    const task = taskList[index];
+                    task.running = true;
+                    task.status.textContent = '🔄'; // 実行中は回転アイコン
+                    if (message) {
+                        task.name.textContent = message;
+                    }
+                    task.element.className = 'task-item';
+                }
+            },
+            setTaskName: function(index, message) {
+                if (index >= 0 && index < taskList.length) {
+                    const task = taskList[index];
+                    if (message) {
+                        task.name.textContent = message;
+                    }
+                }
+            },
+            close: function() {
+                if (progressWindow) {
+                    progressWindow.remove();
+                    progressWindow = null;
+                }
+            }
+        };
+    }
+
     // ===== 一括追加モーダルの作成（TrustedHTML対応版） =====
     function createBatchModal() {
         log('一括追加モーダルを作成します', 'info');
@@ -793,7 +1101,9 @@
                 }
                 
                 log(`一括追加: ${lines.length}件の予定を処理開始`, 'info');
-                executeBatch(lines, progress, progressFill, progressText, status, closeModal);
+                closeModal();
+                
+                executeBatchWithProgress(lines);
             });
             
             // モーダルをDOMに追加
@@ -808,6 +1118,81 @@
             // フォールバック: シンプルなプロンプトで代用
             fallbackBatchInput();
         }
+    }
+
+    // ===== 進捗表示付き一括実行関数 =====
+    async function executeBatchWithProgress(lines) {
+        if (isBatchProcessing) {
+            log('一括追加: 既に処理中です', 'error');
+            return;
+        }
+
+        isBatchProcessing = true;
+
+        // 進捗ウィンドウを作成
+        const progressManager = createProgressWindow(lines.length);
+        let successCount = 0;
+        let errorCount = 0;
+
+        // イベントをパース
+        const events = [];
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+
+            const parsedData = parseInput(line);
+            if (parsedData) {
+                events.push({
+                    data: parsedData,
+                    index: i,
+                    originalText: line
+                });
+                // タスク名だけを設定（状態は未実行のまま）
+                progressManager.setTaskName(i, parsedData.title);
+            } else {
+                errorCount++;
+                // 解析失敗の場合は即座に失敗としてマーク
+                progressManager.updateTask(i, false, `解析失敗: ${line}`);
+                log(`一括追加: 行 ${i + 1} の解析に失敗 - ${line}`, "error");
+            }
+        }
+
+        if (events.length === 0) {
+            log('一括追加: 有効なイベントがありません', 'error');
+            isBatchProcessing = false;
+            progressManager.close();
+            return;
+        }
+
+        log(`一括追加: ${events.length}件のイベントを処理開始`, 'info');
+
+        // イベントを順次実行
+        for (let i = 0; i < events.length; i++) {
+            const event = events[i];
+            
+            // 実行中ステータスを設定
+            progressManager.setTaskRunning(event.index, event.data.title);
+            
+            try {
+                await createSingleEvent(event.data);
+                successCount++;
+                progressManager.updateTask(event.index, true, event.data.title);
+                log(`一括処理: ${event.data.title} を追加しました`, "success");
+            } catch (error) {
+                errorCount++;
+                progressManager.updateTask(event.index, false, `${event.data.title} (失敗)`);
+                log(`一括処理: ${event.data.title} の追加に失敗 - ${error.message}`, "error");
+            }
+            
+            // 次のイベントまでの待機
+            await wait(1000);
+        }
+
+        // 完了処理
+        log(`一括追加: 完了 - ${successCount}成功, ${errorCount}失敗`, 
+            errorCount === 0 ? 'success' : 'warning');
+        
+        isBatchProcessing = false;
     }
 
     // ===== フォールバック関数 =====
@@ -826,71 +1211,9 @@
             const lines = input.split('\n').filter(line => line.trim());
             if (lines.length > 0) {
                 log(`フォールバック: ${lines.length}件の予定を処理開始`, 'info');
-                
-                // シンプルな進捗表示
-                const progress = document.createElement('div');
-                progress.style.cssText = `
-                    position: fixed;
-                    top: 50%;
-                    left: 50%;
-                    transform: translate(-50%, -50%);
-                    background: white;
-                    padding: 20px;
-                    border-radius: 8px;
-                    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-                    z-index: 100000;
-                    text-align: center;
-                `;
-                
-                const progressText = document.createElement('div');
-                progressText.textContent = `処理中: 0/${lines.length}`;
-                
-                progress.appendChild(progressText);
-                document.body.appendChild(progress);
-                
-                // 簡易バッチ実行
-                executeSimpleBatch(lines, progress, progressText);
+                executeBatchWithProgress(lines);
             }
         }
-    }
-
-    // ===== 簡易バッチ実行関数 =====
-    async function executeSimpleBatch(lines, progress, progressText) {
-        let successCount = 0;
-        let errorCount = 0;
-        
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            progressText.textContent = `処理中: ${i + 1}/${lines.length} - ${line}`;
-            
-            try {
-                const parsedData = parseInput(line);
-                if (parsedData) {
-                    await createSingleEvent(parsedData);
-                    successCount++;
-                    log(`簡易一括: ${parsedData.title} を追加しました`, "success");
-                } else {
-                    errorCount++;
-                    log(`簡易一括: 行 ${i + 1} の解析に失敗 - ${line}`, "error");
-                }
-            } catch (error) {
-                errorCount++;
-                log(`簡易一括: 行 ${i + 1} の処理に失敗 - ${error.message}`, "error");
-            }
-            
-            await wait(1000);
-        }
-        
-        progressText.textContent = `完了: ${successCount}成功, ${errorCount}失敗`;
-        log(`簡易一括完了: ${successCount}成功, ${errorCount}失敗`, 
-            errorCount === 0 ? 'success' : 'warning');
-        
-        // 3秒後に進捗表示を削除
-        setTimeout(function() {
-            if (progress.parentNode) {
-                progress.parentNode.removeChild(progress);
-            }
-        }, 3000);
     }
 
     // ===== イベントリスナーの設定（関数式を使用） =====
@@ -1289,88 +1612,6 @@
     }
 
     /**
-     * 一括実行関数
-     */
-    async function executeBatch(lines, progress, progressFill, progressText, status, closeModal) {
-        if (isBatchProcessing) {
-            status.textContent = '既に処理中です';
-            status.className = 'batch-status error show';
-            log('一括追加: 既に処理中です', 'error');
-            return;
-        }
-
-        isBatchProcessing = true;
-        progress.classList.add('active');
-        let successCount = 0;
-        let errorCount = 0;
-
-        // パースしてキューに追加
-        const events = [];
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (!line) continue;
-
-            const parsedData = parseInput(line);
-            if (parsedData) {
-                events.push(parsedData);
-                log(`一括追加: 行 ${i + 1} を解析 - ${parsedData.title}`, 'info');
-            } else {
-                log(`一括追加: 行 ${i + 1} の解析に失敗 - ${line}`, "error");
-                errorCount++;
-            }
-        }
-
-        if (events.length === 0) {
-            status.textContent = '有効なイベントがありません';
-            status.className = 'batch-status error show';
-            log('一括追加: 有効なイベントがありません', 'error');
-            isBatchProcessing = false;
-            progress.classList.remove('active');
-            return;
-        }
-
-        log(`一括追加: ${events.length}件のイベントを処理開始`, 'info');
-
-        // イベントを順次実行
-        for (let i = 0; i < events.length; i++) {
-            const event = events[i];
-            const progressPercent = ((i + 1) / events.length) * 100;
-            
-            progressFill.style.width = `${progressPercent}%`;
-            progressText.textContent = `処理中: ${i + 1}/${events.length} (${event.title})`;
-            
-            try {
-                await createSingleEvent(event);
-                successCount++;
-                log(`一括処理: ${event.title} を追加しました`, "success");
-            } catch (error) {
-                errorCount++;
-                log(`一括処理: ${event.title} の追加に失敗 - ${error.message}`, "error");
-            }
-            
-            // 次のイベントまでの待機
-            await wait(1000);
-        }
-
-        // 完了処理
-        progressText.textContent = `完了: ${successCount}成功, ${errorCount}失敗`;
-        status.textContent = `一括処理が完了しました: ${successCount}成功, ${errorCount}失敗`;
-        status.className = errorCount === 0 ? 'batch-status success show' : 'batch-status error show';
-        
-        log(`一括追加: 完了 - ${successCount}成功, ${errorCount}失敗`, 
-            errorCount === 0 ? 'success' : 'warning');
-        
-        isBatchProcessing = false;
-        
-        // 3秒後にモーダルを閉じる
-        setTimeout(function() {
-            if (errorCount === 0) {
-                closeModal();
-            }
-        }, 3000);
-    }
-
-    /**
      * 単一イベント作成関数（一括処理用）
      */
     async function createSingleEvent(parsedData) {
@@ -1512,10 +1753,9 @@
     });
 
     // 初期化完了
-    log('スクリプト v1.4.0 が初期化されました', 'success');
+    log('スクリプト v1.5.5 が初期化されました', 'success');
     log('作者: ホタル', 'info');
-    log('TrustedHTMLエラーを修正しました', 'info');
-    log('イベントリスナーを関数式に統一しました', 'info');
-    log('一括追加モーダルを改善しました', 'info');
+    log('完了時に「完了！」と表示されるようになりました', 'info');
+    log('完了時に進捗バーが緑色に変わります', 'info');
     log('入力例: "11/23/会議" または "11/2-11/5/ハロウィン"', 'info');
 })();
