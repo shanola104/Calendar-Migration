@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      4.9.2
 // @description  TimeTreeのマンスリーカレンダーから予定を抽出し、正確な日付確認機能付きでGoogleカレンダー用形式で出力します
-// @author       Gemini
+// @author       ホタル
 // @match        https://timetreeapp.com/calendars/*
 // @grant        GM_addStyle
 // @grant        GM_setClipboard
