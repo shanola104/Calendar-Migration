@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         TimeTree Event Extractor v4.2 (モダンUI版)
+// @name         TimeTree Event Extractor v4.9.2 (コンソールログ版)
 // @namespace    http://tampermonkey.net/
-// @version      4.2
+// @version      4.9.2
 // @description  TimeTreeのマンスリーカレンダーから予定を抽出し、正確な日付確認機能付きでGoogleカレンダー用形式で出力します
 // @author       Gemini
 // @match        https://timetreeapp.com/calendars/*
@@ -13,10 +13,14 @@
 (function() {
     'use strict';
 
+    // --- グローバル変数 ---
+    let isScanning = false;
+    let stopRequested = false;
+
     // --- Googleカレンダー自動入力スクリプト完全対応カラーマップ ---
     const colorMap = {
         '#d50000': 'トマト',
-        '#e67c73': 'フラミンゴ',
+        '#e67c73': 'フラミンゴ', 
         '#f4511e': 'ミカン',
         '#f6bf26': 'バナナ',
         '#33b679': 'セージ',
@@ -42,22 +46,53 @@
         '#000000': 'グラファイト'
     };
 
+    // --- ログ管理 ---
+    function consoleLog(message) {
+        const timestamp = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'});
+        console.log(`[TimeTree Extractor ${timestamp}] ${message}`);
+    }
+
+    function uiLog(message) {
+        const logEntry = document.createElement('div');
+        logEntry.className = 'tt-log-entry';
+        
+        const timeElem = document.createElement('div');
+        timeElem.className = 'tt-log-time';
+        timeElem.textContent = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        
+        const messageElem = document.createElement('div');
+        messageElem.className = 'tt-log-message';
+        messageElem.textContent = message;
+        
+        logEntry.appendChild(timeElem);
+        logEntry.appendChild(messageElem);
+        logContent.appendChild(logEntry);
+        logContent.scrollTop = logContent.scrollHeight;
+        
+        logEntries++;
+        logCount.textContent = `${logEntries}件`;
+    }
+
+    function log(message) {
+        consoleLog(message);
+    }
+
     // --- 色変換関数 ---
     function hexToRgb(hex) {
         if (!hex || typeof hex !== 'string') return { r: 0, g: 0, b: 0 };
-
+        
         let cleanHex = hex.replace('#', '').toLowerCase();
-
+        
         if (cleanHex.length === 3) {
             cleanHex = cleanHex[0] + cleanHex[0] + cleanHex[1] + cleanHex[1] + cleanHex[2] + cleanHex[2];
         }
-
+        
         if (cleanHex.length !== 6) return { r: 0, g: 0, b: 0 };
-
+        
         const r = parseInt(cleanHex.substring(0, 2), 16);
         const g = parseInt(cleanHex.substring(2, 4), 16);
         const b = parseInt(cleanHex.substring(4, 6), 16);
-
+        
         return { r, g, b };
     }
 
@@ -75,9 +110,9 @@
 
     function findClosestColorName(targetHex) {
         if (!targetHex) return 'デフォルト';
-
+        
         const normalizedTargetHex = targetHex.toLowerCase();
-
+        
         if (colorMap[normalizedTargetHex]) {
             return colorMap[normalizedTargetHex];
         }
@@ -96,7 +131,7 @@
             }
         }
 
-        console.log(`🎨 色変換: ${targetHex} → ${closestName} (差: ${minDistance.toFixed(2)})`);
+        log(`🎨 色変換: ${targetHex} → ${closestName} (差: ${minDistance.toFixed(2)})`);
         return closestName;
     }
 
@@ -106,11 +141,11 @@
         if (!timeEl) {
             throw new Error('カレンダーの年月要素が見つかりません。');
         }
-
+        
         const yearStr = timeEl.textContent.split('年')[0];
         const currentYear = parseInt(yearStr, 10);
         const currentMonth = parseInt(timeEl.textContent.split('年')[1].split('月')[0]);
-
+        
         const gridCells = document.querySelectorAll('[data-test-id="monthly-calendar"] [role="gridcell"]');
         if (gridCells.length === 0) {
             throw new Error('カレンダーグリッドが見つかりません。');
@@ -136,9 +171,9 @@
             const cell = gridCells[i];
             const dayElement = cell.querySelector('.css-c5ucje');
             if (!dayElement) continue;
-
+            
             const day = parseInt(dayElement.textContent.trim(), 10);
-
+            
             // 月の変わり目を検出（1日が見つかったら月を進める）
             if (i > 0 && day === 1) {
                 if (month === 12) {
@@ -148,7 +183,7 @@
                     month += 1;
                 }
             }
-
+            
             dateMap.push({
                 year: year,
                 month: month,
@@ -160,152 +195,204 @@
         return dateMap;
     }
 
-    // --- 予定の詳細情報から正確な日付を取得する関数（修正版） ---
+    // --- 予定の詳細情報から正確な日付を取得する関数 ---
     async function getExactEventDate(eventButton) {
         return new Promise((resolve, reject) => {
             let attempts = 0;
-            const maxAttempts = 20;
-
-            console.log("🔍 詳細パネルの検索を開始します...");
-
+            const maxAttempts = 5;
+            
+            log("詳細パネルの検索を開始します...");
+            
             const checkForDetails = () => {
+                if (stopRequested) {
+                    reject(new Error('ユーザーによって停止されました'));
+                    return;
+                }
+                
                 attempts++;
-                console.log(`🔍 詳細パネル検索試行 ${attempts}/${maxAttempts}`);
-
+                log(`詳細パネル検索試行 ${attempts}/${maxAttempts}`);
+                
                 // 詳細パネルを探す
-                const detailPanel = document.querySelector('[data-test-id="event-detail"], .pyl1l31, [class*="event-detail"]');
-
+                const detailPanel = document.querySelector('.pyl1l30, [data-test-id="event-detail"]');
+                
                 if (detailPanel) {
-                    console.log("✅ 詳細パネルを発見");
-
-                    // 日付要素を探す
-                    let dateElement = detailPanel.querySelector('._1dctrbe2, ._818y5c4, [class*="date"], h2');
-
-                    if (dateElement) {
-                        console.log("✅ 日付要素を発見");
-                        const dateText = dateElement.textContent.trim();
-                        console.log("📅 日付テキスト:", dateText);
-
-                        // 複数の日付形式をパース
-                        const yearMatch = dateText.match(/(\d{4})年/);
-                        const monthMatch = dateText.match(/(\d{1,2})月/);
-                        const dayMatch = dateText.match(/(\d{1,2})日/);
-
-                        if (yearMatch && monthMatch && dayMatch) {
-                            const year = parseInt(yearMatch[1]);
-                            const month = parseInt(monthMatch[1]);
-                            const day = parseInt(dayMatch[1]);
-
-                            console.log(`📅 解析結果: ${year}年${month}月${day}日`);
-
-                            const startDate = new Date(year, month - 1, day);
-
-                            // 終了日のチェック（期間指定の場合）
-                            let endDate = startDate;
-                            const dateRangeMatch = dateText.match(/(\d{4})年(\d{1,2})月(\d{1,2})日[^]*?(\d{4})年(\d{1,2})月(\d{1,2})日/);
-                            if (dateRangeMatch) {
-                                const endYear = parseInt(dateRangeMatch[4]);
-                                const endMonth = parseInt(dateRangeMatch[5]);
-                                const endDay = parseInt(dateRangeMatch[6]);
-                                endDate = new Date(endYear, endMonth - 1, endDay);
-                                console.log(`📅 期間指定を検出: 終了日 ${endYear}年${endMonth}月${endDay}日`);
-                            }
-
-                            // 詳細パネルを閉じる - 修正: 正しい閉じるボタンを選択
+                    log("詳細パネルを発見");
+                    
+                    // 日付情報を抽出
+                    let dateInfo = extractDateFromDetailPanel(detailPanel);
+                    
+                    if (dateInfo) {
+                        log("日付情報を抽出成功");
+                        
+                        // 詳細パネルを閉じる
+                        setTimeout(() => {
+                            closeDetailPanel();
                             setTimeout(() => {
-                                closeDetailPanel();
-                                setTimeout(() => {
-                                    resolve({
-                                        startDate: startDate,
-                                        endDate: endDate
-                                    });
-                                }, 300);
-                            }, 500);
-
-                            return;
-                        } else {
-                            console.log("❌ 日付の解析に失敗");
-                        }
+                                resolve(dateInfo);
+                            }, 400);
+                        }, 600);
+                        
+                        return;
                     } else {
-                        console.log("❌ 日付要素が見つかりません");
-                        // 代替方法: 詳細パネル内のすべてのテキストから日付を探す
-                        const allText = detailPanel.textContent;
-
-                        const yearMatch = allText.match(/(\d{4})年/);
-                        const monthMatch = allText.match(/(\d{1,2})月/);
-                        const dayMatch = allText.match(/(\d{1,2})日/);
-
-                        if (yearMatch && monthMatch && dayMatch) {
-                            const year = parseInt(yearMatch[1]);
-                            const month = parseInt(monthMatch[1]);
-                            const day = parseInt(dayMatch[1]);
-
-                            console.log(`📅 代替方法で解析: ${year}年${month}月${day}日`);
-
-                            const startDate = new Date(year, month - 1, day);
-
-                            setTimeout(() => {
-                                closeDetailPanel();
-                                setTimeout(() => {
-                                    resolve({
-                                        startDate: startDate,
-                                        endDate: startDate
-                                    });
-                                }, 300);
-                            }, 500);
-                            return;
-                        }
+                        log("日付情報の抽出に失敗");
                     }
                 } else {
-                    console.log("❌ 詳細パネルが見つかりません");
+                    log("詳細パネルが見つかりません");
                 }
-
+                
                 if (attempts < maxAttempts) {
-                    setTimeout(checkForDetails, 200);
+                    setTimeout(checkForDetails, 300);
                 } else {
-                    console.log("❌ 最大試行回数に達しました");
+                    log("最大試行回数に達しました");
                     reject(new Error('詳細情報の取得に失敗しました'));
                 }
             };
-
-            // 詳細パネルを閉じる関数 - 修正: 正しい閉じるボタンを選択
-            function closeDetailPanel() {
-                console.log("🚪 詳細パネルを閉じます");
-
-                // 正しい閉じるボタンを選択 - aria-label="閉じる" かつ ×アイコンのボタン
-                const closeButtons = document.querySelectorAll('button[aria-label="閉じる"]');
-                let correctCloseButton = null;
-
-                for (const button of closeButtons) {
-                    // ×アイコンを含むボタンを探す
-                    const svgPath = button.querySelector('path');
-                    if (svgPath && svgPath.getAttribute('d').includes('5.3079912')) {
-                        correctCloseButton = button;
-                        break;
+            
+            // 詳細パネルから日付情報を抽出する関数
+            function extractDateFromDetailPanel(panel) {
+                log("詳細パネルから日付情報を抽出中...");
+                
+                // ケース1: 終日予定（単一日）
+                const singleDateElement = panel.querySelector('._1dctrbe2');
+                if (singleDateElement) {
+                    const dateText = singleDateElement.textContent.trim();
+                    log(`終日予定の日付テキスト: ${dateText}`);
+                    
+                    const match = dateText.match(/(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日/);
+                    if (match) {
+                        const year = parseInt(match[1]);
+                        const month = parseInt(match[2]);
+                        const day = parseInt(match[3]);
+                        const startDate = new Date(year, month - 1, day);
+                        
+                        log(`終日予定の日付を解析: ${year}年${month}月${day}日`);
+                        return {
+                            startDate: startDate,
+                            endDate: startDate
+                        };
                     }
                 }
-
-                if (correctCloseButton) {
-                    console.log("✅ 正しい閉じるボタンを発見、クリックします");
-                    correctCloseButton.click();
-                } else {
-                    // 代替方法: ESCキーを送信
-                    console.log("⚠️ 閉じるボタンが見つからないためESCキーを送信");
-                    const escEvent = new KeyboardEvent('keydown', {
-                        key: 'Escape',
-                        code: 'Escape',
-                        keyCode: 27,
-                        which: 27,
-                        bubbles: true
-                    });
-                    document.dispatchEvent(escEvent);
+                
+                // ケース2: 期間予定（開始日と終了日）
+                const periodContainer = panel.querySelector('._6jod1k0');
+                if (periodContainer) {
+                    log("期間予定を検出");
+                    
+                    const startElement = periodContainer.querySelector('[data-test-id="event-date-time-start"]');
+                    const endElement = periodContainer.querySelector('[data-test-id="event-date-time-end"]');
+                    
+                    if (startElement && endElement) {
+                        const startYearText = startElement.querySelector('._13wu5da0')?.textContent.trim();
+                        const startDateText = startElement.querySelector('._13wu5da1')?.textContent.trim();
+                        const endYearText = endElement.querySelector('._13wu5da0')?.textContent.trim();
+                        const endDateText = endElement.querySelector('._13wu5da1')?.textContent.trim();
+                        
+                        log(`開始日情報: ${startYearText} ${startDateText}`);
+                        log(`終了日情報: ${endYearText} ${endDateText}`);
+                        
+                        if (startDateText && endDateText) {
+                            // 開始日の解析
+                            const startMatch = startDateText.match(/(\d{1,2})月\s*(\d{1,2})日/);
+                            // 終了日の解析
+                            const endMatch = endDateText.match(/(\d{1,2})月\s*(\d{1,2})日/);
+                            
+                            if (startMatch && endMatch) {
+                                const startYear = startYearText ? parseInt(startYearText.replace('年', '')) : new Date().getFullYear();
+                                const startMonth = parseInt(startMatch[1]);
+                                const startDay = parseInt(startMatch[2]);
+                                
+                                const endYear = endYearText ? parseInt(endYearText.replace('年', '')) : new Date().getFullYear();
+                                const endMonth = parseInt(endMatch[1]);
+                                const endDay = parseInt(endMatch[2]);
+                                
+                                const startDate = new Date(startYear, startMonth - 1, startDay);
+                                const endDate = new Date(endYear, endMonth - 1, endDay);
+                                
+                                log(`期間予定の日付を解析: ${startYear}年${startMonth}月${startDay}日 - ${endYear}年${endMonth}月${endDay}日`);
+                                return {
+                                    startDate: startDate,
+                                    endDate: endDate
+                                };
+                            }
+                        }
+                    }
                 }
+                
+                // ケース3: フォールバック - パネル内の全テキストから日付を検索
+                log("フォールバック: パネル内の全テキストから日付を検索");
+                const allText = panel.textContent || panel.innerText;
+                
+                // 日付パターンを検索
+                const datePattern = /(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日/g;
+                const dates = [];
+                let match;
+                
+                while ((match = datePattern.exec(allText)) !== null) {
+                    const year = parseInt(match[1]);
+                    const month = parseInt(match[2]);
+                    const day = parseInt(match[3]);
+                    dates.push(new Date(year, month - 1, day));
+                }
+                
+                if (dates.length > 0) {
+                    log(`フォールバックで日付を発見: ${dates.length}件`);
+                    const startDate = dates[0];
+                    const endDate = dates.length > 1 ? dates[dates.length - 1] : startDate;
+                    return {
+                        startDate: startDate,
+                        endDate: endDate
+                    };
+                }
+                
+                return null;
             }
-
+            
+            // 詳細パネルを閉じる関数
+            function closeDetailPanel() {
+                log("詳細パネルを閉じます");
+                
+                // 方法1: ESCキーを送信
+                log("ESCキーを送信します");
+                const escEvent = new KeyboardEvent('keydown', {
+                    key: 'Escape',
+                    code: 'Escape',
+                    keyCode: 27,
+                    which: 27,
+                    bubbles: true
+                });
+                document.dispatchEvent(escEvent);
+                
+                // 方法2: 閉じるボタンをクリック
+                setTimeout(() => {
+                    const closeButtons = document.querySelectorAll('button[aria-label="閉じる"], button._12lkfsm2');
+                    for (const button of closeButtons) {
+                        try {
+                            // ×アイコンのボタンを特定
+                            const svg = button.querySelector('svg');
+                            if (svg) {
+                                const path = svg.querySelector('path');
+                                if (path && path.getAttribute('d') && path.getAttribute('d').includes('5.3079912')) {
+                                    log("閉じるボタンを発見、クリックします");
+                                    button.click();
+                                    break;
+                                }
+                            }
+                        } catch (e) {
+                            log("ボタンクリックでエラー");
+                        }
+                    }
+                }, 200);
+            }
+            
             // イベントボタンをクリック
-            console.log("🖱️ イベントボタンをクリックします");
-            eventButton.click();
-            setTimeout(checkForDetails, 800);
+            log("イベントボタンをクリックします");
+            try {
+                eventButton.click();
+                setTimeout(checkForDetails, 1000);
+            } catch (e) {
+                log("イベントボタンのクリックに失敗");
+                reject(e);
+            }
         });
     }
 
@@ -314,6 +401,8 @@
         :root {
             --tt-primary: #6366f1;
             --tt-primary-hover: #4f46e5;
+            --tt-stop: #ef4444;
+            --tt-stop-hover: #dc2626;
             --tt-secondary: #f8fafc;
             --tt-secondary-hover: #f1f5f9;
             --tt-surface: #ffffff;
@@ -333,6 +422,8 @@
             :root {
                 --tt-primary: #818cf8;
                 --tt-primary-hover: #6366f1;
+                --tt-stop: #ef4444;
+                --tt-stop-hover: #dc2626;
                 --tt-secondary: #334155;
                 --tt-secondary-hover: #475569;
                 --tt-surface: #1e293b;
@@ -373,6 +464,11 @@
             color: white;
             position: relative;
             overflow: hidden;
+            cursor: move;
+        }
+
+        #tt-header:active {
+            cursor: grabbing;
         }
 
         #tt-header::before {
@@ -534,6 +630,14 @@
             transform: translateY(-2px);
             box-shadow: 0 8px 20px rgba(99, 102, 241, 0.4);
         }
+        #tt-integrated-scan-btn.stop-scan {
+            background: var(--tt-stop);
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+        }
+        #tt-integrated-scan-btn.stop-scan:hover {
+            background: var(--tt-stop-hover);
+            box-shadow: 0 8px 20px rgba(239, 68, 68, 0.4);
+        }
         #tt-copy-btn {
             background: var(--tt-secondary);
             color: var(--tt-text-primary);
@@ -585,13 +689,10 @@
             background: var(--tt-secondary);
             border: 1px solid var(--tt-border);
             border-radius: 12px;
-            max-height: 140px;
+            max-height: 200px;
             overflow-y: auto;
             font-size: 12px;
             color: var(--tt-text-secondary);
-            display: none;
-        }
-        .tt-log-area.active {
             display: block;
         }
         .tt-log-header {
@@ -602,9 +703,11 @@
             display: flex;
             align-items: center;
             gap: 6px;
+            cursor: pointer;
+            user-select: none;
         }
         .tt-log-content {
-            max-height: 100px;
+            max-height: 150px;
             overflow-y: auto;
         }
         .tt-log-entry {
@@ -620,10 +723,18 @@
             font-size: 10px;
             min-width: 50px;
             flex-shrink: 0;
+            margin-top: 1px;
         }
         .tt-log-message {
             flex: 1;
             word-break: break-word;
+            line-height: 1.4;
+        }
+        .tt-log-icon {
+            width: 16px;
+            height: 16px;
+            flex-shrink: 0;
+            margin-top: 1px;
         }
 
         /* スクロールバーのスタイル */
@@ -642,12 +753,23 @@
             background: var(--tt-text-secondary);
         }
 
-        /* ドラッグ可能にする */
-        #tt-extractor-panel {
-            cursor: move;
+        .tt-log-controls {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
         }
-        #tt-extractor-panel:active {
-            cursor: grabbing;
+        .tt-log-button {
+            background: none;
+            border: none;
+            color: var(--tt-text-muted);
+            font-size: 11px;
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+        .tt-log-button:hover {
+            background: var(--tt-border);
+            color: var(--tt-text-primary);
         }
     `);
 
@@ -661,7 +783,7 @@
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                         <path d="M8 7V3M16 7V3M7 11H17M5 21H19C20.1046 21 21 20.1046 21 19V7C21 5.89543 20.1046 5 19 5H5C3.89543 5 3 5.89543 3 7V19C3 20.1046 3.89543 21 5 21Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
-                    TimeTree Extractor
+                    TimeTree Extractor v4.9.2
                 </div>
                 <div id="tt-status" class="idle">準備完了</div>
             </div>
@@ -692,11 +814,16 @@
         </div>
         <textarea id="tt-result-output" readonly placeholder="「統合スキャン実行」ボタンを押して、高精度な予定抽出を開始します。"></textarea>
         <div class="tt-log-area" id="tt-log-area">
-            <div class="tt-log-header">
+            <div class="tt-log-header" id="tt-log-header">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M13 2L3 14H12L11 22L21 10H12L13 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
-                実行中のタスク
+                進行状況
+                <span style="margin-left: auto; font-size: 10px; opacity: 0.7;" id="tt-log-count">0件</span>
+            </div>
+            <div class="tt-log-controls">
+                <button class="tt-log-button" id="tt-clear-log">ログをクリア</button>
+                <button class="tt-log-button" id="tt-toggle-log">折りたたむ</button>
             </div>
             <div class="tt-log-content" id="tt-log-content"></div>
         </div>
@@ -714,33 +841,37 @@
     const progressFill = document.querySelector('.tt-progress-fill');
     const logArea = document.getElementById('tt-log-area');
     const logContent = document.getElementById('tt-log-content');
+    const logHeader = document.getElementById('tt-log-header');
+    const clearLogBtn = document.getElementById('tt-clear-log');
+    const toggleLogBtn = document.getElementById('tt-toggle-log');
+    const logCount = document.getElementById('tt-log-count');
 
     let finalResultsText = "";
+    let isLogExpanded = true;
+    let logEntries = 0;
 
-    // --- ドラッグ機能 ---
+    // --- ドラッグ機能（ヘッダーのみで発火）---
     let isDragging = false;
     let dragOffset = { x: 0, y: 0 };
 
-    panel.addEventListener('mousedown', (e) => {
-        if (e.target.closest('button') || e.target.closest('textarea')) {
-            return;
-        }
+    const header = document.getElementById('tt-header');
+
+    header.addEventListener('mousedown', (e) => {
         isDragging = true;
         dragOffset.x = e.clientX - panel.getBoundingClientRect().left;
         dragOffset.y = e.clientY - panel.getBoundingClientRect().top;
-        panel.style.cursor = 'grabbing';
+        e.preventDefault();
     });
 
     document.addEventListener('mousemove', (e) => {
         if (!isDragging) return;
-
+        
         const x = e.clientX - dragOffset.x;
         const y = e.clientY - dragOffset.y;
-
-        // 画面内に制限
+        
         const maxX = window.innerWidth - panel.offsetWidth;
         const maxY = window.innerHeight - panel.offsetHeight;
-
+        
         panel.style.left = Math.max(0, Math.min(x, maxX)) + 'px';
         panel.style.top = Math.max(0, Math.min(y, maxY)) + 'px';
         panel.style.right = 'auto';
@@ -750,7 +881,6 @@
 
     document.addEventListener('mouseup', () => {
         isDragging = false;
-        panel.style.cursor = 'move';
     });
 
     // --- ヘルパー関数 ---
@@ -759,8 +889,6 @@
         statusEl.textContent = text;
         animEl.classList.toggle('scanning', state === 'scanning');
         progressEl.classList.toggle('active', state === 'scanning');
-        logArea.classList.toggle('active', state === 'scanning');
-        integratedScanBtn.disabled = (state === 'scanning');
         copyBtn.disabled = (state !== 'success' || !finalResultsText);
     }
 
@@ -769,72 +897,84 @@
         if (progressFill) progressFill.style.width = `${percent}%`;
     }
 
-    function addLog(message) {
-        const logEntry = document.createElement('div');
-        logEntry.className = 'tt-log-entry';
-
-        const timeElem = document.createElement('div');
-        timeElem.className = 'tt-log-time';
-        timeElem.textContent = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-
-        const messageElem = document.createElement('div');
-        messageElem.className = 'tt-log-message';
-        messageElem.textContent = message;
-
-        logEntry.appendChild(timeElem);
-        logEntry.appendChild(messageElem);
-        logContent.appendChild(logEntry);
-        logContent.scrollTop = logContent.scrollHeight;
-    }
-
     function formatDate(date) {
         return `${date.getMonth() + 1}/${date.getDate()}`;
-    }
-
-    function isContinuous(date1, date2) {
-        const nextDay = new Date(date1.getTime());
-        nextDay.setDate(nextDay.getDate() + 1);
-        return nextDay.getFullYear() === date2.getFullYear() &&
-               nextDay.getMonth() === date2.getMonth() &&
-               nextDay.getDate() === date2.getDate();
-    }
-
-    function log(message) {
-        console.log(`[TimeTree Extractor] ${message}`);
-        addLog(message);
     }
 
     function wait(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
-    // --- 基本スキャン関数 ---
+    // --- スキャンボタンの状態管理 ---
+    function setScanButtonToStop() {
+        integratedScanBtn.innerHTML = `
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="6" y="6" width="12" height="12" rx="1" stroke="currentColor" stroke-width="2"/>
+            </svg>
+            停止
+        `;
+        integratedScanBtn.classList.add('stop-scan');
+    }
+
+    function setScanButtonToStart() {
+        integratedScanBtn.innerHTML = `
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M9 12L11 14L15 10M21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            統合スキャン実行
+        `;
+        integratedScanBtn.classList.remove('stop-scan');
+    }
+
+    // --- ログ管理機能 ---
+    function clearLog() {
+        logContent.innerHTML = '';
+        logEntries = 0;
+        logCount.textContent = '0件';
+        uiLog('ログをクリアしました');
+    }
+
+    function toggleLog() {
+        isLogExpanded = !isLogExpanded;
+        if (isLogExpanded) {
+            logContent.style.display = 'block';
+            toggleLogBtn.textContent = '折りたたむ';
+        } else {
+            logContent.style.display = 'none';
+            toggleLogBtn.textContent = '展開する';
+        }
+    }
+
+    // ログ管理イベントリスナー
+    clearLogBtn.addEventListener('click', clearLog);
+    toggleLogBtn.addEventListener('click', toggleLog);
+
+    // --- 基本スキャン関数（連続予定統合なし）---
     function performBasicScan() {
-        log('🔍 基本スキャンを開始します...');
+        uiLog('基本スキャンを開始します...');
 
-        // 1. 正確な日付マップを作成
         const dateMap = createAccurateDateMap();
-        log(`🗺️ 正確な日付マップを作成しました (${dateMap.length}セル)`);
+        uiLog(`正確な日付マップを作成しました (${dateMap.length}セル)`);
 
-        // 2. イベント要素をすべて取得
         const eventElements = document.querySelectorAll('[data-test-id="monthly-calendar"] .lndlxo5');
-        log(`🔍 予定要素を ${eventElements.length} 件検出しました。`);
+        uiLog(`予定要素を ${eventElements.length} 件検出しました。`);
 
         let rawEvents = [];
         const processedElements = new Set();
 
         eventElements.forEach((el, index) => {
+            if (stopRequested) return;
             if (processedElements.has(el)) return;
             processedElements.add(el);
 
             const style = el.style;
-            const lndlxo2 = parseInt(style.getPropertyValue('--lndlxo2'), 10); // 列 (1-7)
-            const lndlxo3 = parseInt(style.getPropertyValue('--lndlxo3'), 10); // 行
-            const lndlxo4 = parseInt(style.getPropertyValue('--lndlxo4') || '1', 10); // 日数
+            const lndlxo2 = parseInt(style.getPropertyValue('--lndlxo2'), 10);
+            const lndlxo3 = parseInt(style.getPropertyValue('--lndlxo3'), 10);
+            const lndlxo4 = parseInt(style.getPropertyValue('--lndlxo4') || '1', 10);
 
             const button = el.querySelector('button');
             if (!button) return;
-
+            
             const titleEl = button.querySelector('.lndlxo9');
             if (!titleEl) return;
             const title = titleEl.textContent.trim();
@@ -846,197 +986,281 @@
             if (colorMatch && colorMatch[1]) {
                 colorHex = colorMatch[1];
             }
-
-            // 色名変換
+            
             const colorName = findClosestColorName(colorHex);
 
-            // 日付にマッピング - 改善された計算
+            // 日付にマッピング
             const weekIndex = Math.floor((lndlxo3 - 3) / 7);
             const colIndex = lndlxo2 - 1;
             const mapIndex = (weekIndex * 7) + colIndex;
 
             if (mapIndex < 0 || (mapIndex + lndlxo4 - 1) >= dateMap.length) {
-                log(`⚠️ [${title}] の日付特定に失敗しました (範囲外: ${mapIndex})`);
+                log(`[${title}] の日付特定に失敗しました (範囲外: ${mapIndex})`);
                 return;
             }
 
             const startDateInfo = dateMap[mapIndex];
             const endDateInfo = dateMap[mapIndex + lndlxo4 - 1];
-
+            
             const startDate = new Date(startDateInfo.year, startDateInfo.month - 1, startDateInfo.day);
             const endDate = new Date(endDateInfo.year, endDateInfo.month - 1, endDateInfo.day);
 
-            rawEvents.push({
-                title,
-                colorName,
-                startDate,
+            rawEvents.push({ 
+                title, 
+                colorName, 
+                startDate, 
                 endDate,
                 element: el,
                 button: button,
-                verified: false // 基本スキャンでは未確認
+                verified: false,
+                duration: lndlxo4
+            });
+
+            log(`基本スキャン: [${title}] ${startDateInfo.year}/${startDateInfo.month}/${startDateInfo.day} - ${endDateInfo.year}/${endDateInfo.month}/${endDateInfo.day} (${lndlxo4}日)`);
+        });
+
+        if (stopRequested) {
+            throw new Error('ユーザーによって停止されました');
+        }
+
+        uiLog(`基本スキャンで抽出した予定: ${rawEvents.length} 件`);
+        
+        // 基本スキャンでは連続予定統合を行わない
+        return rawEvents;
+    }
+
+    // --- 重複除去関数（詳細スキャン結果用）---
+    function removeDuplicateDetailedEvents(events) {
+        const uniqueEvents = [];
+        const eventMap = new Map();
+        
+        events.forEach(event => {
+            // 詳細スキャン結果を完全に同一のものかチェック
+            const key = `${event.title}|${event.startDate.getTime()}|${event.endDate.getTime()}|${event.colorName}`;
+            
+            if (!eventMap.has(key)) {
+                eventMap.set(key, true);
+                uniqueEvents.push(event);
+            } else {
+                log(`重複した詳細スキャン結果を除去: ${event.title}`);
+            }
+        });
+        
+        return uniqueEvents;
+    }
+
+    // --- 基本スキャンと詳細スキャンの結果を照合する関数（詳細スキャン優先・改善版）---
+    function reconcileScanResults(basicEvents, detailedEvents) {
+        uiLog('基本スキャンと詳細スキャンの結果を照合中...');
+        
+        const finalEvents = [];
+        
+        // まず詳細スキャンの結果をすべて追加（詳細スキャンを優先）
+        detailedEvents.forEach(detailedEvent => {
+            finalEvents.push({
+                ...detailedEvent,
+                source: 'detailed',
+                verified: true
             });
         });
-
-        log(`🧩 基本スキャンで抽出した予定: ${rawEvents.length} 件`);
-
-        // 3. 予定の統合処理
-        const groupedEvents = new Map();
-        rawEvents.forEach(event => {
-            const key = `${event.title}|${event.colorName}`;
-            if (!groupedEvents.has(key)) {
-                groupedEvents.set(key, []);
-            }
-            groupedEvents.get(key).push(event);
-        });
-
-        log(`🤝 統合対象のグループ: ${groupedEvents.size} 件`);
-
-        const finalEvents = [];
-        groupedEvents.forEach((eventsInGroup, key) => {
-            eventsInGroup.sort((a, b) => a.startDate - b.startDate);
-
-            if (eventsInGroup.length === 0) return;
-
-            let currentMergedEvent = { ...eventsInGroup[0] };
-
-            for (let i = 1; i < eventsInGroup.length; i++) {
-                const nextEvent = eventsInGroup[i];
-                if (isContinuous(currentMergedEvent.endDate, nextEvent.startDate)) {
-                    currentMergedEvent.endDate = nextEvent.endDate;
-                    log(`🔗 [${currentMergedEvent.title}] の予定を統合しました。`);
+        
+        // 基本スキャンの結果で詳細スキャンに含まれていないものを追加
+        basicEvents.forEach(basicEvent => {
+            // 詳細スキャンに完全に一致する予定があるかチェック
+            const exactMatch = detailedEvents.some(detailedEvent => 
+                detailedEvent.title === basicEvent.title &&
+                detailedEvent.colorName === basicEvent.colorName &&
+                detailedEvent.startDate.getTime() === basicEvent.startDate.getTime() &&
+                detailedEvent.endDate.getTime() === basicEvent.endDate.getTime()
+            );
+            
+            // 詳細スキャンに包含されている予定があるかチェック（期間が完全に含まれる場合）
+            const isContainedInDetailed = detailedEvents.some(detailedEvent => 
+                detailedEvent.title === basicEvent.title &&
+                detailedEvent.colorName === basicEvent.colorName &&
+                detailedEvent.startDate.getTime() <= basicEvent.startDate.getTime() &&
+                detailedEvent.endDate.getTime() >= basicEvent.endDate.getTime()
+            );
+            
+            // 詳細スキャンに部分的に重複している予定があるかチェック
+            const isOverlappingWithDetailed = detailedEvents.some(detailedEvent => 
+                detailedEvent.title === basicEvent.title &&
+                detailedEvent.colorName === basicEvent.colorName &&
+                ((basicEvent.startDate.getTime() >= detailedEvent.startDate.getTime() && 
+                  basicEvent.startDate.getTime() <= detailedEvent.endDate.getTime()) ||
+                 (basicEvent.endDate.getTime() >= detailedEvent.startDate.getTime() && 
+                  basicEvent.endDate.getTime() <= detailedEvent.endDate.getTime()))
+            );
+            
+            if (!exactMatch && !isContainedInDetailed && !isOverlappingWithDetailed) {
+                finalEvents.push({
+                    ...basicEvent,
+                    source: 'basic',
+                    verified: false
+                });
+                uiLog(`基本スキャンから補完: ${basicEvent.title}`);
+            } else {
+                if (exactMatch) {
+                    log(`完全一致のため基本スキャンから除外: ${basicEvent.title}`);
+                } else if (isContainedInDetailed) {
+                    log(`包含関係のため基本スキャンから除外: ${basicEvent.title}`);
                 } else {
-                    finalEvents.push(currentMergedEvent);
-                    currentMergedEvent = { ...nextEvent };
+                    log(`部分重複のため基本スキャンから除外: ${basicEvent.title}`);
                 }
             }
-            finalEvents.push(currentMergedEvent);
         });
-
-        // 4. 最終結果を日付順にソート
-        finalEvents.sort((a, b) => a.startDate - b.startDate);
-
-        log(`✅ 基本スキャン完了: ${finalEvents.length} 件の予定を抽出`);
-
+        
+        uiLog(`照合結果: 詳細${detailedEvents.length}件 + 基本${finalEvents.length - detailedEvents.length}件 = 合計${finalEvents.length}件`);
         return finalEvents;
     }
 
-    // --- 詳細確認スキャン関数（改善版） ---
-    async function performDetailedVerification(basicEvents) {
-        log('🔍 詳細確認を開始します...');
-
-        const verifiedEvents = [];
+    // --- 詳細スキャン関数（全イベントを再スキャン）---
+    async function performCompleteDetailedScan(allEventButtons) {
+        uiLog('詳細スキャンを開始します...');
+        
+        const detailedEvents = [];
         let successCount = 0;
         let errorCount = 0;
 
-        // 基本スキャンの結果を元に詳細確認
-        for (let i = 0; i < basicEvents.length; i++) {
-            const basicEvent = basicEvents[i];
-
-            updateProgress(`詳細確認中: ${basicEvent.title} (${i+1}/${basicEvents.length})`, (i / basicEvents.length) * 70 + 20);
+        // すべてのイベントボタンに対して詳細スキャンを実行
+        for (let i = 0; i < allEventButtons.length; i++) {
+            if (stopRequested) {
+                uiLog('ユーザーによって停止されました');
+                break;
+            }
+            
+            const eventButton = allEventButtons[i];
+            
+            updateProgress(`詳細スキャン中: ${i+1}/${allEventButtons.length}`, (i / allEventButtons.length) * 80);
 
             try {
-                // 対応するボタンを探す
-                const eventElements = document.querySelectorAll('[data-test-id="monthly-calendar"] .lndlxo5');
-                let targetButton = null;
-
-                for (const el of eventElements) {
-                    const button = el.querySelector('button');
-                    if (button) {
-                        const titleEl = button.querySelector('.lndlxo9');
-                        if (titleEl && titleEl.textContent.trim() === basicEvent.title) {
-                            targetButton = button;
-                            break;
-                        }
-                    }
+                log(`[${i+1}/${allEventButtons.length}] の詳細スキャンを開始`);
+                
+                const exactDates = await getExactEventDate(eventButton);
+                
+                // タイトルと色を取得
+                const titleEl = eventButton.querySelector('.lndlxo9');
+                const title = titleEl ? titleEl.textContent.trim() : 'タイトル不明';
+                
+                const buttonStyle = eventButton.getAttribute('style') || '';
+                let colorHex = '#8f8f8f';
+                const colorMatch = buttonStyle.match(/--_1(?:r1c5vl0|bf4eeq0|foazdk0):\s*(#[0-9a-fA-F]{3,8})/);
+                if (colorMatch && colorMatch[1]) {
+                    colorHex = colorMatch[1];
                 }
+                const colorName = findClosestColorName(colorHex);
+                
+                detailedEvents.push({
+                    title: title,
+                    colorName: colorName,
+                    startDate: exactDates.startDate,
+                    endDate: exactDates.endDate,
+                    verified: true,
+                    source: 'detailed'
+                });
 
-                if (targetButton) {
-                    log(`🔍 [${basicEvent.title}] の詳細確認を開始`);
-                    const exactDates = await getExactEventDate(targetButton);
+                uiLog(`✅ ${title} の詳細スキャン成功: ${formatDate(exactDates.startDate)}${exactDates.startDate.getTime() !== exactDates.endDate.getTime() ? `-${formatDate(exactDates.endDate)}` : ''}`);
+                successCount++;
 
-                    verifiedEvents.push({
-                        title: basicEvent.title,
-                        colorName: basicEvent.colorName,
-                        startDate: exactDates.startDate,
-                        endDate: exactDates.endDate,
-                        verified: true
-                    });
-
-                    log(`✅ [${basicEvent.title}] の日付を確認: ${formatDate(exactDates.startDate)}${exactDates.startDate.getTime() !== exactDates.endDate.getTime() ? `-${formatDate(exactDates.endDate)}` : ''}`);
-                    successCount++;
-
-                    // 次のイベントまでの待機
-                    await wait(1000);
-                } else {
-                    log(`⚠️ [${basicEvent.title}] の対応するボタンが見つかりません`);
-                    // 見つからない場合は基本スキャンの結果を使用
-                    verifiedEvents.push(basicEvent);
-                    errorCount++;
-                }
+                // 次のイベントまでの待機
+                await wait(1200);
 
             } catch (error) {
-                log(`❌ [${basicEvent.title}] の詳細確認に失敗: ${error.message}`);
-                // 失敗した場合は基本スキャンの結果を使用
-                verifiedEvents.push(basicEvent);
+                if (error.message === 'ユーザーによって停止されました') {
+                    throw error;
+                }
+                uiLog(`❌ ${allEventButtons.length}件中${i+1}件目の詳細スキャンに失敗`);
                 errorCount++;
             }
         }
 
-        log(`📊 詳細確認結果: ${successCount}成功, ${errorCount}失敗/未確認`);
-
-        return verifiedEvents;
+        uiLog(`詳細スキャン結果: ${successCount}成功, ${errorCount}失敗`);
+        return detailedEvents;
     }
 
-    // --- 統合スキャン関数 ---
+    // --- 統合スキャン関数（改善版）---
     async function performIntegratedScan() {
+        if (isScanning) {
+            stopRequested = true;
+            return;
+        }
+
+        isScanning = true;
+        stopRequested = false;
         finalResultsText = "";
         resultOutput.value = '';
-        logContent.innerHTML = '';
+        
+        setScanButtonToStop();
         updateStatus('scanning', '統合スキャン実行中...');
-
+        
         try {
-            // ステップ1: 基本スキャン
+            // ステップ1: 基本スキャンを実行（連続予定統合なし）
             updateProgress('基本スキャンを実行中...', 10);
             const basicEvents = performBasicScan();
-
+            
+            if (stopRequested) {
+                throw new Error('ユーザーによって停止されました');
+            }
+            
             if (basicEvents.length === 0) {
                 resultOutput.value = '基本スキャンで予定が見つかりませんでした。';
                 updateStatus('idle', '0件');
                 return;
             }
 
-            // ステップ2: 詳細確認
-            updateProgress('詳細確認を実行中...', 20);
-            const verifiedEvents = await performDetailedVerification(basicEvents);
+            // ステップ2: すべてのイベントボタンを収集（統合前の基本イベントから）
+            const allEventButtons = basicEvents.map(event => event.button);
+            uiLog(`${allEventButtons.length} 件のイベントを詳細スキャンします`);
 
-            // ステップ3: 最終結果を日付順にソート
-            updateProgress('結果を整理中...', 90);
-            verifiedEvents.sort((a, b) => a.startDate - b.startDate);
+            // ステップ3: 完全な詳細スキャンを実行
+            updateProgress('詳細スキャンを実行中...', 30);
+            const detailedEvents = await performCompleteDetailedScan(allEventButtons);
 
-            // ステップ4: 出力文字列を作成
-            const outputLines = verifiedEvents.map(event => {
+            if (stopRequested) {
+                throw new Error('ユーザーによって停止されました');
+            }
+
+            // ステップ4: 詳細スキャン結果から重複を除去
+            updateProgress('重複を除去中...', 85);
+            const uniqueDetailedEvents = removeDuplicateDetailedEvents(detailedEvents);
+            log(`詳細スキャンの重複除去: ${detailedEvents.length} → ${uniqueDetailedEvents.length} 件`);
+
+            // ステップ5: 基本スキャンと詳細スキャンの結果を照合（詳細スキャンを優先・改善版）
+            const finalEvents = reconcileScanResults(basicEvents, uniqueDetailedEvents);
+
+            // ステップ6: 出力文字列を作成
+            const outputLines = finalEvents.map(event => {
                 const startDateStr = formatDate(event.startDate);
                 const endDateStr = formatDate(event.endDate);
-
+                
                 const dateString = (event.startDate.getTime() === event.endDate.getTime())
                     ? startDateStr
                     : `${startDateStr}-${endDateStr}`;
-
+                    
                 return `${dateString}/${event.title}/${event.colorName}`;
             });
-
+            
             finalResultsText = outputLines.join('\n');
 
             // 結果表示
             resultOutput.value = finalResultsText;
-            updateStatus('success', `完了 (${verifiedEvents.length}件)`);
-            log(`🎉 統合スキャン完了！ ${verifiedEvents.length} 件の予定を高精度で抽出しました。`);
+            updateStatus('success', `完了 (${finalEvents.length}件)`);
+            uiLog(`🎉 統合スキャン完了！ ${finalEvents.length} 件の予定を高精度で抽出しました。`);
 
         } catch (e) {
-            console.error('TimeTree Extractor Error:', e);
-            log(`🔥 統合スキャンエラー: ${e.message}`);
-            updateStatus('error', 'エラー');
-            resultOutput.value = `統合スキャン中にエラーが発生しました。\n詳細はコンソール（F12）を確認してください。\n\n${e.message}`;
+            if (e.message === 'ユーザーによって停止されました') {
+                uiLog('🛑 スキャンを停止しました');
+                updateStatus('idle', '停止しました');
+                resultOutput.value = 'スキャンがユーザーによって停止されました。';
+            } else {
+                uiLog(`🔥 統合スキャンエラー: ${e.message}`);
+                updateStatus('error', 'エラー');
+                resultOutput.value = `統合スキャン中にエラーが発生しました。\n\n${e.message}`;
+            }
+        } finally {
+            isScanning = false;
+            stopRequested = false;
+            setScanButtonToStart();
         }
     }
 
@@ -1045,7 +1269,7 @@
         if (!finalResultsText) return;
 
         GM_setClipboard(finalResultsText);
-
+        
         const originalText = copyBtn.innerHTML;
         copyBtn.innerHTML = `
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -1054,7 +1278,7 @@
             コピー済み!
         `;
         updateStatus('success', 'コピー済み!');
-        log('📋 結果をクリップボードにコピーしました。');
+        uiLog('📋 結果をクリップボードにコピーしました。');
 
         setTimeout(() => {
             copyBtn.innerHTML = originalText;
@@ -1066,6 +1290,7 @@
     integratedScanBtn.addEventListener('click', performIntegratedScan);
     copyBtn.addEventListener('click', copyResultsToClipboard);
 
-    log('🟩 TimeTree Extractor v4.2 (モダンUI版) が起動しました。');
+    uiLog('TimeTree Extractor v4.9.2 が起動しました。');
+    log('TimeTree Extractor v4.9.2 (コンソールログ版) が起動しました。詳細なログはコンソールで確認してください。');
 
 })();
