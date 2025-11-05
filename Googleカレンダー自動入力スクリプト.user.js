@@ -722,8 +722,8 @@
         colorPalette.appendChild(colorButton);
     });
 
-    colorPaletteSection.appendChild(colorPaletteTitle);
     colorPaletteSection.appendChild(colorPalette);
+    colorPaletteSection.appendChild(colorPaletteTitle);
     mainContainer.appendChild(colorPaletteSection);
 
     // ステータスエリアの作成
@@ -1633,3 +1633,4 @@
     // UIの再構築は行わず、元のコードの流れのまま、ドラッグ機能のみを修正して提供します。
     
 })();
+
